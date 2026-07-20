@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "render": "node scripts/render.mjs",
+    "check": "node scripts/render.mjs --check",
+    "test-patterns": "node scripts/make-test-patterns.mjs"
   },
   "dependencies": {
     "next": "16.2.10",

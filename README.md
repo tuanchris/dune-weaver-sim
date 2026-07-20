@@ -336,15 +336,41 @@ it was traced.
 | `public/patterns/test/` | Generated diagnostics — gitignored, run the script |
 | `scripts/make-test-patterns.mjs` | Generates the synthetic test patterns |
 
-`playwright` is a devDependency used to drive the app in a real GPU browser and
-screenshot renders for verification. There is no automated test suite; the
-checks that matter here are visual, and the two worth re-running after any change
-to the physics are:
+## CLI
 
-- **Batch invariance.** Render a pattern with "Skip to end", then again played
-  through at each speed, and compare the canvases pixel for pixel. They must be
-  *identical* — 0 differing pixels, not "close". This is sensitive to almost any
-  accidental order- or batch-dependence in the physics, and it has caught more
-  real bugs than anything else here.
-- **Erasure.** Load `maze.thr`, tick **Keep existing sand**, then run
-  `clear_from_out.thr`. The maze must be completely gone.
+The simulation is WebGL2 end to end, so there is no way to run it in Node. The
+CLI drives the real app in headless Chromium on the real GPU instead — what it
+renders is exactly what a browser renders, rather than a second implementation
+that could drift. It needs the dev server running.
+
+```bash
+npm run dev                                   # in another terminal
+
+npm run render -- maze -o maze.png            # a bundled pattern, or any path
+npm run render -- ./mine.thr --detail 4096 --table 700 --ball 10
+npm run check                                 # regression checks, non-zero on failure
+npm run check -- --backfill 0                 # ...and prove they still bite
+npm run test-patterns                         # regenerate the synthetic diagnostics
+```
+
+Parameters are injected by seeding the same `localStorage` blob the panel
+writes, rather than by driving sliders through the DOM — one code path, so the
+CLI cannot silently disagree with what the UI would have produced.
+
+`npm run check` runs two checks. **Batch invariance**: skip-to-end and
+played-through must be *pixel identical*, which is sensitive to almost any
+accidental order- or batch-dependence in the physics. **Erasure**: a clear
+pattern over a maze must resemble the clear pattern alone far more than it
+resembles the maze. On failure it writes `check-erasure-*.png` with the
+differences highlighted in red.
+
+The erasure check is relative rather than absolute on purpose. "Must match the
+clear alone within 2%" fails on correct output — the ridges keep a faint memory
+of what was underneath, and with a narrow ridge that speckle alone is ~8% of
+pixels. Loosening a threshold until it passes leaves a number that means
+nothing, whereas the ratio moves hard when backfill actually regresses. Backfill
+is pinned for that check rather than inherited, since the shipped default is
+deliberately low.
+
+See `COMMENTS.md` for unresolved artefacts, deliberate omissions, and what the
+checks do *not* cover.
