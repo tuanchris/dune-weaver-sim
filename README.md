@@ -357,6 +357,8 @@ Parameters are injected by seeding the same `localStorage` blob the panel
 writes, rather than by driving sliders through the DOM — one code path, so the
 CLI cannot silently disagree with what the UI would have produced.
 
+`COMMANDS.md` is the full command reference, including every flag.
+
 `npm run check` runs two checks. **Batch invariance**: skip-to-end and
 played-through must be *pixel identical*, which is sensitive to almost any
 accidental order- or batch-dependence in the physics. **Erasure**: a clear

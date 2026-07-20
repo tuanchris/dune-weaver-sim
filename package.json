@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "render": "node scripts/render.mjs",
     "check": "node scripts/render.mjs --check",
     "test-patterns": "node scripts/make-test-patterns.mjs"
