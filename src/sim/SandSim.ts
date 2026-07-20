@@ -54,14 +54,19 @@ export interface RenderParams {
   aoStrength: number;
 }
 
+/**
+ * Tuned by eye against photographs of a real table rather than derived: a
+ * narrow, sharply defined ridge with a lot of material thrown up, and low
+ * backfill so a pattern drawn over another only partly erases it.
+ */
 export const DEFAULT_SAND: SandParams = {
-  tableDiameterMm: 400,
-  ballDiameterMm: 11,
+  tableDiameterMm: 700,
+  ballDiameterMm: 10,
   depthMm: 3.2,
-  bermWidthMm: 4,
-  bermGain: 0.5,
-  fill: 0.7,
-  reposeSlope: 0.6,
+  bermWidthMm: 0.5,
+  bermGain: 1.06,
+  fill: 0.21,
+  reposeSlope: 0.7,
   grain: 0.0012,
 };
 

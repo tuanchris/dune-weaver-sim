@@ -59,6 +59,28 @@ they re-run the pattern from its starting sand, which is fast enough to feel
 live on most patterns (see the timings above). Re-simulations are coalesced to one per animation
 frame, so dragging a slider doesn't queue a full run per input event.
 
+Every control in the panel, plus the detail level and playback speed, is saved
+to `localStorage` and restored on the next visit. **Reset parameters** returns
+the sliders to the defaults, which is also what a cleared store gives you.
+
+Restoring happens in the canvas's callback ref rather than a lazy `useState`
+initializer, because the panel is server-prerendered — reading `localStorage`
+during render would produce markup disagreeing with the server's and trip a
+hydration mismatch. A callback ref runs on the client after hydration. The cost
+is that a stored resolution arrives one render late and rebuilds the sim once on
+load, before any pattern exists, which is cheap.
+
+Stored values are merged over the defaults key by key and type-checked on the
+way in, never trusted wholesale. `localStorage` is user-editable and shared with
+everything else on the origin, and a blob written before a parameter existed
+would otherwise leave that parameter `undefined` — which reaches the shader as
+NaN and blanks the table. A corrupt, hostile, or non-JSON blob falls back to
+defaults silently rather than failing to start.
+
+Pattern history is deliberately *not* persisted: a single `.thr` runs to tens of
+thousands of lines and a dropped file exists only as text held in memory, so
+saving history would mean putting megabytes into a ~5 MB store.
+
 Both replay and live editing rely on a third `base` texture holding the sand as
 it stood when the current pattern was loaded. That is what makes re-running
 non-destructive when a pattern was drawn over an earlier one: the sim rewinds to
@@ -291,8 +313,13 @@ position. It affects motor motion, not where the sand ends up.
 
 Physical table and ball dimensions aren't recorded anywhere in the firmware or
 host repos — everything there is normalised or in motor space. The defaults
-(400 mm table, 11 mm ball) are placeholders to be set for the table you care
-about, not measurements taken from the hardware.
+(700 mm table, 10 mm ball) were tuned by eye against how a real table looks, not
+measured off the hardware, so set them for the table you care about.
+
+The sand defaults are the same kind of thing: a narrow, sharply defined ridge
+with a lot of material thrown up (`bermWidthMm` 0.5, `bermGain` 1.06) and low
+backfill (`fill` 0.21), so a pattern drawn over another only partly erases it.
+They are a look, not a measurement.
 
 Feedrate is ignored: the sand result depends on path geometry, not on how fast
 it was traced.

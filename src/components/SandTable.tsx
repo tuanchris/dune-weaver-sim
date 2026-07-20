@@ -79,6 +79,62 @@ interface HistoryEntry {
 
 const HISTORY_LIMIT = 12;
 
+/**
+ * Versioned, so a future change to the parameter set can be told apart from
+ * a stale blob rather than silently half-applied.
+ */
+const STORAGE_KEY = 'dune-weaver-sim:settings:v1';
+
+interface StoredSettings {
+  sand?: unknown;
+  render?: unknown;
+  resolution?: unknown;
+  speedIdx?: unknown;
+}
+
+/**
+ * Copy stored values over defaults, keeping only keys the defaults declare and
+ * only values of the right shape.
+ *
+ * Merging rather than replacing matters for forward compatibility: a blob
+ * written before a parameter existed would otherwise leave that parameter
+ * `undefined`, which reaches the shader as NaN and blanks the table. Validating
+ * matters because localStorage is user-editable and shared with anything else
+ * on the origin — a hand-edited string in a numeric field would do the same.
+ */
+function mergeStored<T extends object>(defaults: T, stored: unknown): T {
+  if (!stored || typeof stored !== 'object') return defaults;
+  const src = stored as Record<string, unknown>;
+  const out = { ...defaults };
+  for (const key of Object.keys(defaults) as (keyof T & string)[]) {
+    const fallback = defaults[key];
+    const value = src[key];
+    const isNumber = typeof value === 'number' && Number.isFinite(value);
+    if (typeof fallback === 'number' && isNumber) {
+      out[key] = value as T[keyof T & string];
+    } else if (
+      Array.isArray(fallback) &&
+      Array.isArray(value) &&
+      value.length === fallback.length &&
+      value.every((n) => typeof n === 'number' && Number.isFinite(n))
+    ) {
+      out[key] = value as T[keyof T & string];
+    }
+  }
+  return out;
+}
+
+function readSettings(): StoredSettings | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredSettings) : null;
+  } catch {
+    // Private browsing, a disabled store, or a corrupt blob. Defaults are a
+    // perfectly good outcome; failing to start is not.
+    return null;
+  }
+}
+
 interface LoopContext {
   simRef: RefObject<SandSim | null>;
   rafRef: RefObject<number | null>;
@@ -132,6 +188,8 @@ export default function SandTable() {
   const resumeRef = useRef(0);
   const sandRef = useRef<SandParams>(DEFAULT_SAND);
   const renderRef = useRef<RenderParams>(DEFAULT_RENDER);
+  /** Guards the one-time restore from localStorage across sim rebuilds. */
+  const restoredRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -156,6 +214,35 @@ export default function SandTable() {
   const attachCanvas = useCallback((node: HTMLCanvasElement | null) => {
     canvasRef.current = node;
     if (!node) return;
+
+    // Restore saved settings on the first attach only.
+    //
+    // This happens here rather than in a lazy useState initializer because the
+    // panel is server-prerendered: reading localStorage during render would
+    // produce markup that disagrees with the server's and trip a hydration
+    // mismatch. A callback ref runs on the client after hydration, so it is
+    // safe. The cost is that a stored resolution arrives one render late and
+    // rebuilds the sim once on load, which is cheap and happens before any
+    // pattern is loaded.
+    if (!restoredRef.current) {
+      restoredRef.current = true;
+      const stored = readSettings();
+      if (stored) {
+        const s = mergeStored(DEFAULT_SAND, stored.sand);
+        const r = mergeStored(DEFAULT_RENDER, stored.render);
+        sandRef.current = s;
+        renderRef.current = r;
+        setSand(s);
+        setRender(r);
+        const res = RESOLUTIONS.find((x) => x.size === stored.resolution);
+        if (res) setResolution(res.size);
+        const idx = stored.speedIdx;
+        if (typeof idx === 'number' && SPEEDS[idx]) {
+          setSpeedIdx(idx);
+          durationRef.current = SPEEDS[idx].seconds;
+        }
+      }
+    }
 
     let sim: SandSim;
     try {
@@ -240,6 +327,22 @@ export default function SandTable() {
       }
     };
   }, [sand]);
+
+  // Persist the panel. Deliberately not the pattern history: a single .thr can
+  // be tens of thousands of lines, and a dropped file only exists as text we
+  // hold, so persisting history means putting megabytes into a ~5 MB store that
+  // is shared with everything else on the origin.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ sand, render, resolution, speedIdx }),
+      );
+    } catch {
+      // Full or unavailable store. Losing the setting is survivable; throwing
+      // out of an effect on every slider drag is not.
+    }
+  }, [sand, render, resolution, speedIdx]);
 
   // Diagnostic: draw the resampled path as a bare polyline, with no physics and
   // no shading. If a feature shows up here it is in the pattern data, and no
