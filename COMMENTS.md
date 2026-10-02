@@ -28,6 +28,72 @@ undersampling — the strokes really do all pass through one point — but it ha
 not been investigated, and it may partly be a rendering artefact of the normal
 estimate at high curvature.
 
+**Sand is not conserved where the ball works a small closed area.** Found by
+photographing a DW Pro (README, "Calibrated against a photo of a DW Pro"). The
+carve removes sand, and the ridge and backfill add it back by rule, not by
+volume. On the table, an eye traced inward heaped a mound in its middle and a
+0.6-ball zigzag in a tooth-sized box heaped a raised block with a slot. The
+simulator showed a spiral and chevrons. Backfill also adds sand on every
+repeated pass, so a dense spiral renders paler than the bare floor it leaves on
+the table. Judge small dense fills on the table.
+
+Two fixes were tried and reverted. A conserving carve, which heaped the removed
+cross-section half on each side as a ridge at the angle of repose, striated
+long grooves and left blobs. Making the ridge continuous along the path did not
+remove the pinches below. The calibrated ridge (2.5 mm at gain 2.6)
+approximates the volume well enough away from closed areas.
+
+**Chord pinches with a wide ridge.** With the calibrated 2.5 mm ridge, long
+smooth curves (the rings of a clear pattern) show faint periodic pinches at the
+path's vertices, about 22–25 mm apart. They are the polyline's chords: a 0.26 mm
+sagitta is enough to move a wide ridge. The default 0.5 mm ridge hides them.
+
+**The plow model (`model: 1`) is fitted, not derived.** Its rules (bow wave,
+spill, dump at reversals, the wake and the slump) are a heightfield stand-in
+for granular flow. Their settings were fitted to 3D granular physics (MPM) on
+five small patches, checked on two more held out, and checked against one photo
+of one table. These are its known gaps:
+
+- **The references are imperfect.** The physics runs at 0.5 mm cells, so a
+  quarter-ball spiral's 2.5 mm rings are only five cells apart; it shows the
+  rings as thin ridges, while the photo shows broad ridges and thin slits.
+  The physics also leaves about 1.5 mm of sand inside a side-to-side tooth
+  fill that reads as a dark slot on the table. Where the two disagree, the
+  photo is the arbiter, and it has the last word on fine pitch.
+- **One setting serves opposite cases.** Spilling to the side already cut
+  (`plowEven`) makes the strands between hair strokes and the rings of a
+  spiral. The physics instead moves a spiral's sand outward, leaving its
+  interior lower than the model does.
+- **The reversal window is a compromise.** A side-to-side fill turns back
+  through two right angles a quarter ball apart, so the detector compares
+  headings half a ball apart. A spiral's first turn, under about 3 mm radius,
+  also passes for a reversal and drops a small pile at its centre.
+- **The look was limited by the shader.** With conserved sand the floor shows
+  through less often than with the carve model. The ring render's fixed
+  ambient fill kept shadowed sand from going as dark as the photo's slits, and
+  plow renders had about half the photo's local contrast. `ambient` (0.04 in
+  `dwpro-v4`) now reaches the photo's brightness range.
+- **No GPU port.** The plan was to move it to fragment passes. At 2048 cells
+  the CPU runs a 110 m pattern in about 9 s (32 s with the 4 sub-steps that
+  remove the step zipper), so it stayed on the CPU, step for step, where the
+  rules are easy to read and change.
+- **Soft next to the photo.** With sub-steps the step seams are gone, but the
+  renders are still softer than a photo of the table: they show no grain at the
+  scale the photo does, and slumped slopes are smooth planes at repose. A finer grid does not help (4096 looks the same as 2048).
+- **Flat tops between lines.** On the table every ridge in a drawing is a
+  rounded hump between narrow slits. Two things made the simulator's look flat,
+  and neither was the sand's physics. Fitting to plain RMSE chose a wide (5.5 mm)
+  berm band, which spreads the moved sand into flat-topped bands; a fit that
+  lets each tile shift a millimetre picks 2 mm. And the toned ring render
+  clipped every lit slope to the same white and banded every trough dark (sand
+  colour above 1, a 2 mm floor cover), where the heights themselves were
+  rounded humps. What remains is light: the table photos are lit from one side
+  (room light, the camera), and the simulated ring lights evenly.
+- **Spirals hold only in the full fit.** Fitted on five patches with the
+  outlined tooth and the spiral held out, the mound piles improve the held-out
+  tooth (0.60 against 0.66 mm) but not the spiral (0.59 against 0.53 mm).
+  `dwpro-v4` is fitted on all seven.
+
 **Faint stipple along overlapping grooves.** Noticed early, never diagnosed.
 Distinct from the periodic spike above; shows up where two grooves cross at a
 shallow angle.
@@ -49,7 +115,8 @@ Nothing in the firmware or host repos records a real table radius or ball
 diameter — everything there is normalised or in motor space. The shipped
 defaults (700 mm table, 10 mm ball, and the sand parameters alongside them) were
 tuned by eye to match how a real table looks. They are a starting point for the
-table you care about, not hardware specs. Do not cite them as such.
+table you care about, not hardware specs. Do not cite them as such. The DW Pro
+set in the README was measured, but against a single photo of one table.
 
 ## Testing
 

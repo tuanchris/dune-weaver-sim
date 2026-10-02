@@ -14,7 +14,9 @@ import {
   RELAX_FRAG,
   RENDER_FRAG,
   RESET_FRAG,
+  withDefine,
 } from './shaders';
+import { plowSegment, plowFinish, newPlowState, type PlowParams, type PlowState } from './plow';
 
 /**
  * Physical dimensions are in millimetres. Nothing in the firmware or host repos
@@ -40,8 +42,78 @@ export interface SandParams {
    * per pass. 0 means grooves are permanent and nothing can ever be erased.
    */
   fill: number;
+  /**
+   * Backfill needs loose sand to drop, and a ball running back beside the
+   * groove it cut a moment ago has none: it dumped its bow wave at the turn
+   * (beaver v13's teeth drew bright frames of end piles) and the sand between
+   * the two passes is already gone. Where the ball runs within half a ball of
+   * its own path from the last `bowWaveMm` of travel (not counting the last
+   * three quarters of a ball, its own wake), it backfills nothing, so dense side-to-side
+   * passes leave the bare floor, as the teeth of beaver v17 did on the table.
+   * A spiral's previous ring, a lap back, and an earlier row of strokes are
+   * refilled as before. 0 = off: backfill is the same everywhere.
+   */
+  bowWaveMm: number;
+  /**
+   * Sand thinner than this, mm, over the depth the ball rides at is swept away
+   * wherever the ball itself runs that deep beside it: the slivers between
+   * passes a quarter ball apart cannot stand on the tray floor. 0 = off.
+   */
+  scrapeMm: number;
   /** Max neighbour-to-neighbour slope the sand can hold. */
   reposeSlope: number;
+  /**
+   * Path segments between angle-of-repose passes, and relaxation iterations
+   * per pass. Each iteration moves sand about one heightfield texel, so a few
+   * iterations every few dozen segments let a fresh ridge slump back into the
+   * groove behind the ball, as on the table: beaver v17 drew narrow slits
+   * between broad rounded ridges where the default (one iteration every 512
+   * segments) keeps steep walls, wide flat grooves and thin sharp ridges.
+   */
+  relaxEverySegments: number;
+  relaxIterations: number;
+  /**
+   * 0 = carve (the GPU carve shader, the default). 1 = plow (plow.ts): sand
+   * conserved, carried by the ball, shed as ridges, dumped at reversals and
+   * slumped to `reposeSlope` round the ball every step. The plow settings
+   * below apply only to it; ridge width is `bermWidthMm`, the tray floor is
+   * `floorMm` below the surface (0 = no floor).
+   */
+  model: number;
+  /** Share of the carried load shed as ridges per ball radius of travel, whatever its size. */
+  plowShed: number;
+  /** What the bow wave holds before it spills as ridges: the sand plowed over this much travel, mm. */
+  plowCarryMm: number;
+  /** Share of the carried load that may fill hollows ahead, per ball radius of travel. */
+  plowFill: number;
+  /** Share of the carried load dumped as a pile at a reversal. */
+  plowDump: number;
+  /** How evenly shed sand splits between the sides: 0 = all where the ball cuts fresh sand, 1 = half each. */
+  plowEven: number;
+  /** Where across its band the shed ridge peaks: 0 = at the groove's lip, 1 = at the band's outer edge. */
+  plowRidgePeak: number;
+  /** Share of the load per ball radius that flows back into the groove just behind the ball. */
+  plowWake: number;
+  /** Where across the groove the wake lands (plow.ts `wakeEdge`): 0 evenly, above 0 toward the walls, below 0 toward the middle. */
+  plowWakeEdge: number;
+  /** Relaxation sweeps round the ball per step. */
+  plowRelaxSweeps: number;
+  /**
+   * Steps per quarter ball radius (plow.ts `substeps`): 1 steps a quarter ball at a time and leaves
+   * a ripple at that period along every groove; 4 brings a 10 mm ball's step under a cell at 2048.
+   */
+  plowSubsteps: number;
+  /**
+   * The pile left at a reversal (plow.ts `pileR`, `pileAhead`): 0 = a crescent round the ball's
+   * front; above 0, a round mound that many ball radii across, centred `plowPileAhead` radii ahead.
+   * Mounds merge into the caps at stroke tips and the rampart round a fill, as the physics shows.
+   */
+  plowPileR: number;
+  plowPileAhead: number;
+  /** Plow grid resolution (cells across the table); its heights are upsampled to the render grid. */
+  plowSize: number;
+  /** Tray floor below the nominal surface, mm (0 = deep sand). The ball rides at `depthMm`. */
+  floorMm: number;
   /** Surface grain amplitude. */
   grain: number;
 }
@@ -52,6 +124,30 @@ export interface RenderParams {
   lightElevation: number;
   sandColor: [number, number, number];
   aoStrength: number;
+  /**
+   * 0 = one raking key light (`lightAzimuth`, `lightElevation`). 1 = the
+   * table's own LED ring: lights around the rim at `ringRadius` table radii and
+   * `ringHeightMm` above the sand, each shadowed by marching the heightfield
+   * `shadowMm` toward it.
+   */
+  lightMode: number;
+  ringRadius: number;
+  ringHeightMm: number;
+  shadowMm: number;
+  /**
+   * Ambient fill in ring mode: light bounced into shadow, relative to the key.
+   * 0.28 is the raking light's; a table in a dark room has less, and its slits
+   * read darker. The raking light ignores it.
+   */
+  ambient: number;
+  /**
+   * 1 = the sand is a thin layer over a dark tray floor at the groove depth
+   * (`depthMm`, the ball riding on the floor). Sand thinner than `coverMm`
+   * shows the floor through, tinted `floorColor`.
+   */
+  floor: number;
+  coverMm: number;
+  floorColor: [number, number, number];
 }
 
 /**
@@ -66,7 +162,26 @@ export const DEFAULT_SAND: SandParams = {
   bermWidthMm: 0.5,
   bermGain: 1.06,
   fill: 0.21,
+  bowWaveMm: 0,
+  scrapeMm: 0,
   reposeSlope: 0.7,
+  relaxEverySegments: 512,
+  relaxIterations: 1,
+  model: 0,
+  plowShed: 0,
+  plowCarryMm: 30,
+  plowFill: 0,
+  plowDump: 1,
+  plowEven: 0,
+  plowRidgePeak: 0,
+  plowWake: 0,
+  plowWakeEdge: 0,
+  plowRelaxSweeps: 2,
+  plowSubsteps: 1,
+  plowPileR: 0,
+  plowPileAhead: 1.7,
+  plowSize: 1024,
+  floorMm: 0,
   grain: 0.0012,
 };
 
@@ -76,6 +191,14 @@ export const DEFAULT_RENDER: RenderParams = {
   lightElevation: 0.34,
   sandColor: [0.88, 0.79, 0.63],
   aoStrength: 16,
+  lightMode: 0,
+  ringRadius: 1.02,
+  ringHeightMm: 15,
+  shadowMm: 14,
+  ambient: 0.28,
+  floor: 0,
+  coverMm: 0.6,
+  floorColor: [0.1, 0.1, 0.14],
 };
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -130,6 +253,27 @@ interface Target {
   fbo: WebGLFramebuffer;
 }
 
+/**
+ * For every point of a flat x,y path: 0 where the path runs within `near` of
+ * itself from between `gap` and `window` of travel earlier, 1 where it is
+ * clear by `far`, smoothstepped between (all world units).
+ */
+export function selfOverlap(path: Float32Array, scale: number, window: number, gap: number, near: number, far: number): Float32Array {
+  const n = path.length / 2, out = new Float32Array(n), s = new Float64Array(n);
+  for (let i = 1; i < n; i++) s[i] = s[i - 1] + Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1]) * scale;
+  let lo = 0, hi = 0;
+  for (let i = 0; i < n; i++) {
+    while (lo < i && s[lo] < s[i] - window) lo++;
+    while (hi < i && s[hi + 1] <= s[i] - gap) hi++;
+    let best = Infinity;
+    const x = path[i * 2] * scale, y = path[i * 2 + 1] * scale;
+    if (s[hi] <= s[i] - gap) for (let j = lo; j <= hi; j++) best = Math.min(best, Math.hypot(path[j * 2] * scale - x, path[j * 2 + 1] * scale - y));
+    const t = Math.min(1, Math.max(0, (best - near) / (far - near)));
+    out[i] = t * t * (3 - 2 * t);
+  }
+  return out;
+}
+
 export class SandSim {
   private gl: WebGL2RenderingContext;
   private size: number;
@@ -142,7 +286,19 @@ export class SandSim {
   private progRelax: WebGLProgram;
   private progReset: WebGLProgram;
   private progRender: WebGLProgram;
+  /**
+   * `RENDER_FRAG` compiled with optional features (`RING`, `FLOOR`), built on
+   * first use. The default render stays `progRender`, compiled from exactly
+   * the code it always had, so turning features off is bit-identical.
+   */
+  private renderVariants = new Map<string, WebGLProgram>();
   private segBuf = new Float32Array(MAX_SEGMENTS * 4);
+  /** Share of backfill at each path point (see `bowWaveMm`). */
+  private fillShare: Float32Array | null = null;
+  /** Plow model state (model = 1): its own heightfield at plowSize, and the ball's load. */
+  private plowH: Float32Array | null = null;
+  private plowState: PlowState = newPlowState();
+  private runKey = '';
 
   /** Dense path in table space, as flat x,y pairs. */
   private path: Float32Array = new Float32Array(0);
@@ -388,6 +544,7 @@ export class SandSim {
     const gl = this.gl;
     this.cursor = 0;
     this.relaxedIntervals = 0;
+    this.plowH = null;
     this.pending = 0;
     this.beginPass(this.progReset, [-1, -1, 1, 1]);
     gl.uniform1f(this.loc(this.progReset, 'uGrain'), this.sand.grain);
@@ -427,6 +584,7 @@ export class SandSim {
     this.path = path;
     this.cursor = 0;
     this.relaxedIntervals = 0;
+    this.plowH = null;
     this.pending = 0;
     // Remember the sand as it stood before this pattern ran, so the pattern can
     // be replayed or re-simulated without losing whatever was underneath it.
@@ -438,6 +596,7 @@ export class SandSim {
     this.blit(this.base, this.front);
     this.cursor = 0;
     this.relaxedIntervals = 0;
+    this.plowH = null;
     this.pending = 0;
   }
 
@@ -491,6 +650,13 @@ export class SandSim {
       const count = Math.min(MAX_SEGMENTS, total - this.cursor);
       if (this.pending < count) break;
       const start = this.cursor;
+      if (this.sand.model === 1) {
+        this.plowChunk(start, count);
+        this.cursor += count;
+        this.pending -= count;
+        consumed += count;
+        continue;
+      }
 
       let minX = Infinity;
       let minY = Infinity;
@@ -579,7 +745,8 @@ export class SandSim {
       gl.uniform1f(this.loc(prog, 'uDepth'), this.depthWorld);
       gl.uniform1f(this.loc(prog, 'uBermW'), this.bermWidthWorld);
       gl.uniform1f(this.loc(prog, 'uBermGain'), this.sand.bermGain);
-      gl.uniform1f(this.loc(prog, 'uFill'), this.sand.fill);
+      gl.uniform1f(this.loc(prog, 'uFill'), this.sand.fill * this.bowWaveScale(start));
+      gl.uniform1f(this.loc(prog, 'uScrape'), this.sand.scrapeMm * this.worldPerMm);
       gl.uniform2f(
         this.loc(prog, 'uCapStart'),
         this.path[start * 2] * scale, this.path[start * 2 + 1] * scale,
@@ -598,14 +765,94 @@ export class SandSim {
 
       // Let ridges slump periodically rather than after every chunk — the
       // visual difference is negligible and it is a full-field pass.
-      const intervals = Math.floor(this.cursor / RELAX_EVERY_SEGMENTS);
+      const intervals = Math.floor(this.cursor / (this.sand.relaxEverySegments || RELAX_EVERY_SEGMENTS));
       if (intervals > this.relaxedIntervals) {
         this.relaxedIntervals = intervals;
-        this.relax(1);
+        this.relax(this.sand.relaxIterations ?? 1);
       }
     }
 
+    if (this.sand.model === 1 && consumed > 0) {
+      if (this.cursor >= total && this.plowH) {
+        const n = this.path.length / 2 - 1, scale = this.pathScale;
+        plowFinish(this.plowH, this.plowSize, this.plowParams(), this.plowState, this.path[n * 2] * scale, this.path[n * 2 + 1] * scale);
+      }
+      this.plowUpload();
+    }
     return consumed;
+  }
+
+  private get plowSize(): number {
+    return Math.min(this.size, Math.max(256, Math.round(this.sand.plowSize || 1024)));
+  }
+
+  private plowParams(): PlowParams {
+    const floor = this.sand.floorMm > 0 ? this.sand.floorMm * this.worldPerMm : 1e3;
+    return {
+      ballR: this.ballRadiusWorld, depth: this.depthWorld, floor,
+      ridgeW: Math.max(this.bermWidthWorld, 2 * (2 / this.plowSize)),
+      shed: this.sand.plowShed, carry: this.sand.plowCarryMm * this.worldPerMm, fill: this.sand.plowFill, dump: this.sand.plowDump, even: this.sand.plowEven ?? 0, ridgePeak: Math.min(.95, Math.max(0, this.sand.plowRidgePeak ?? 0)), wake: this.sand.plowWake ?? 0, wakeEdge: this.sand.plowWakeEdge ?? 0,
+      repose: this.sand.reposeSlope, relaxSweeps: Math.max(0, Math.round(this.sand.plowRelaxSweeps)),
+      substeps: Math.max(1, Math.round(this.sand.plowSubsteps ?? 1)),
+      pileR: Math.max(0, this.sand.plowPileR ?? 0), pileAhead: this.sand.plowPileAhead ?? 1.7,
+    };
+  }
+
+  /** Run the plow model over path segments [start, start + count). */
+  private plowChunk(start: number, count: number) {
+    const n = this.plowSize;
+    if (!this.plowH) {
+      // Start from the sand as it stands (box-filtered down to the plow grid).
+      const full = this.captureHeight(), f = this.size / n, h = new Float32Array(n * n);
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+        let s = 0, k = 0;
+        for (let y = Math.floor(r * f); y < Math.floor((r + 1) * f); y++) for (let x = Math.floor(c * f); x < Math.floor((c + 1) * f); x++) { s += full[y * this.size + x]; k++; }
+        h[r * n + c] = s / k;
+      }
+      this.plowH = h;
+      this.plowState = newPlowState();
+    }
+    const p = this.plowParams(), scale = this.pathScale;
+    for (let i = start; i < start + count; i++) {
+      plowSegment(this.plowH, n, p, this.plowState,
+        this.path[i * 2] * scale, this.path[i * 2 + 1] * scale, this.path[i * 2 + 2] * scale, this.path[i * 2 + 3] * scale);
+    }
+  }
+
+  /** Upload the plow heightfield to the render grid (bilinear). */
+  private plowUpload() {
+    if (!this.plowH) return;
+    const n = this.plowSize, N = this.size, src = this.plowH;
+    let out = src;
+    if (n !== N) {
+      out = new Float32Array(N * N);
+      const f = n / N;
+      for (let r = 0; r < N; r++) {
+        const y = Math.min(n - 1.000001, Math.max(0, (r + 0.5) * f - 0.5)), y0 = Math.floor(y), fy = y - y0;
+        for (let c = 0; c < N; c++) {
+          const x = Math.min(n - 1.000001, Math.max(0, (c + 0.5) * f - 0.5)), x0 = Math.floor(x), fx = x - x0, i = y0 * n + x0;
+          out[r * N + c] = (src[i] * (1 - fx) + src[i + 1] * fx) * (1 - fy) + (src[i + n] * (1 - fx) + src[i + n + 1] * fx) * fy;
+        }
+      }
+    }
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.front.tex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RED, gl.FLOAT, out);
+  }
+
+  /**
+   * Share of `fill` the ball has at path point `k` (see `bowWaveMm`). Depends
+   * only on the path and the physical settings, never on how the work is
+   * batched.
+   */
+  private bowWaveScale(k: number): number {
+    if (!(this.sand.bowWaveMm > 0)) return 1;
+    const scale = this.pathScale, r = this.ballRadiusWorld, key = `${scale}:${r}:${this.sand.bowWaveMm}`;
+    if (!this.fillShare || this.runKey !== key || this.fillShare.length !== this.path.length / 2) {
+      this.fillShare = selfOverlap(this.path, scale, this.sand.bowWaveMm * this.worldPerMm, 1.5 * r, 0.7 * r, 1.2 * r);
+      this.runKey = key;
+    }
+    return this.fillShare[k];
   }
 
   /** Run the angle-of-repose pass. */
@@ -628,13 +875,19 @@ export class SandSim {
   /** Run the whole pattern in one go, yielding nothing. */
   runToEnd() {
     while (!this.done) this.advance(4096);
-    this.relax(2);
+    if (this.sand.model !== 1) this.relax(2);   // the plow model slumps as it goes
   }
 
   /** Shade the heightfield to the canvas. */
   draw() {
     const gl = this.gl;
-    const prog = this.progRender;
+    const defines = [...(this.render.lightMode > 0.5 ? ['RING'] : []), ...(this.render.floor > 0.5 ? ['FLOOR'] : [])];
+    let prog = this.progRender;
+    if (defines.length) {
+      const key = defines.join(',');
+      if (!this.renderVariants.has(key)) this.renderVariants.set(key, link(gl, QUAD_VERT, defines.reduce(withDefine, RENDER_FRAG)));
+      prog = this.renderVariants.get(key)!;
+    }
     const canvas = gl.canvas as HTMLCanvasElement;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -655,6 +908,13 @@ export class SandSim {
     gl.uniform1f(this.loc(prog, 'uGrain'), this.sand.grain);
     gl.uniform1f(this.loc(prog, 'uAoStrength'), this.render.aoStrength);
     gl.uniform1f(this.loc(prog, 'uAoRadius'), AO_RADIUS_UV);
+    gl.uniform1f(this.loc(prog, 'uRingRadius'), this.render.ringRadius);
+    gl.uniform1f(this.loc(prog, 'uRingHeight'), this.render.ringHeightMm * this.worldPerMm);
+    gl.uniform1f(this.loc(prog, 'uShadowDist'), this.render.shadowMm * this.worldPerMm);
+    gl.uniform1f(this.loc(prog, 'uAmbient'), this.render.ambient ?? 0.28);
+    gl.uniform1f(this.loc(prog, 'uFloorDepth'), this.depthWorld);
+    gl.uniform1f(this.loc(prog, 'uCover'), this.render.coverMm * this.worldPerMm);
+    gl.uniform3fv(this.loc(prog, 'uFloorColor'), this.render.floorColor);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
@@ -683,6 +943,7 @@ export class SandSim {
     );
     this.cursor = 0;
     this.relaxedIntervals = 0;
+    this.plowH = null;
     this.pending = 0;
   }
 
@@ -693,7 +954,7 @@ export class SandSim {
       gl.deleteFramebuffer(t.fbo);
     }
     gl.deleteVertexArray(this.vao);
-    for (const p of [this.progCarve, this.progRelax, this.progReset, this.progRender]) {
+    for (const p of [this.progCarve, this.progRelax, this.progReset, this.progRender, ...this.renderVariants.values()]) {
       gl.deleteProgram(p);
     }
   }

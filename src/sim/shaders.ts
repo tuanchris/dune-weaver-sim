@@ -8,6 +8,12 @@
 
 export const MAX_SEGMENTS = 8;
 
+/** Compile-time variant of a fragment shader: `#define NAME` after its `#version` line. */
+export function withDefine(src: string, name: string): string {
+  const nl = src.indexOf('\n');
+  return src.slice(0, nl + 1) + `#define ${name} 1\n` + src.slice(nl + 1);
+}
+
 /** Draws a quad covering an arbitrary world-space AABB. */
 export const QUAD_VERT = /* glsl */ `#version 300 es
 precision highp float;
@@ -56,6 +62,7 @@ uniform float uDepth;     // how deep the ball sits below nominal surface
 uniform float uBermW;     // width of the displaced-material ridge
 uniform float uBermGain;  // fraction of displaced material that piles at the edge
 uniform float uFill;      // how strongly the ball's bow wave backfills old grooves
+uniform float uScrape;    // sand thinner than this over the ball's floor depth is swept off (0 = off)
 
 // The chunk's own first and last path points, with the directions it enters and
 // leaves by. Used to recognise the capsule's rounded end caps, which are an
@@ -137,6 +144,11 @@ void main() {
       // into any depression it crosses, so the old groove partially backfills.
       newH = mix(h, target, uFill);
     }
+    // A sliver of sand left between two close passes, thinner than a few grains,
+    // cannot stand on the tray floor where the ball runs beside it: it is swept
+    // into the ball's path and on with it. Only where the ball here runs within
+    // uScrape of its floor depth, so a groove's walls are untouched.
+    if (uScrape > 0.0 && target + uDepth < uScrape && newH + uDepth < uScrape) newH = min(newH, -uDepth);
   } else if (bestDist < uBallR + uBermW && !pastCap) {
     // Berm deposition is additive, so unlike the carve it is NOT idempotent and
     // every pixel must be claimed by exactly one chunk. Without the cap test a
@@ -253,6 +265,28 @@ uniform vec3  uSandColor;
 uniform float uGrain;
 uniform float uAoStrength;
 uniform float uAoRadius;  // uv units, NOT texels — see below
+#ifdef RING
+// Ring mode (compiled with RING): the table's own LED strip, a ring of lights
+// at radius uRingRadius and height uRingHeight above the sand (world units),
+// lit from RING_TAPS points. Each tap is shadowed by marching the heightfield
+// toward it for uShadowDist, so a groove's floor sits in the shade of its walls
+// at the strip's low angle, which is what makes grooves read dark on the table.
+uniform float uRingRadius;
+uniform float uRingHeight;
+uniform float uShadowDist;
+// Ambient fill under the ring: light bounced into shadow. The table is viewed
+// in a dark room, where the raking default's fill keeps slits too bright.
+uniform float uAmbient;
+#endif
+#ifdef FLOOR
+// Floor mode (compiled with FLOOR): the sand is a thin layer over a dark tray
+// floor, uFloorDepth deep (world units) — the ball rides on the floor, so this
+// is the groove depth. Sand thinner than uCover lets the floor show through,
+// which on a real table is what makes a groove read as a dark line.
+uniform float uFloorDepth;
+uniform float uCover;
+uniform vec3  uFloorColor;
+#endif
 
 out vec4 fragColor;
 
@@ -338,14 +372,63 @@ void main() {
   vec3 H = normalize(L + V);
   float spec = pow(max(dot(n, H), 0.0), 24.0) * 0.05;
 
+#ifdef RING
+  {
+    // The ring: taps around the rim, nearer ones brighter (a line source falls
+    // off as 1/d), normalised so the table centre receives 1.
+    const int RING_TAPS = 24;
+    const int MARCH = 24;
+    float sum = 0.0;
+    float specSum = 0.0;
+    for (int k = 0; k < RING_TAPS; k++) {
+      float phi = (float(k) + 0.5) / float(RING_TAPS) * 6.2831853;
+      vec2 q = uRingRadius * vec2(cos(phi), sin(phi));
+      vec2 toQ = q - world;
+      float dist = max(length(toQ), 1e-4);
+      vec2 dirW = toQ / dist;
+      vec3 Lk = normalize(vec3(dirW * dist, uRingHeight));
+      float tanEl = uRingHeight / dist;
+      // March toward the tap. Display space is heightfield space turned 180°,
+      // and one uv unit is two world units.
+      float horizon = -1e3;
+      for (int j = 1; j <= MARCH; j++) {
+        float s = uShadowDist * float(j) / float(MARCH);
+        if (s >= dist) break;
+        float hj = heightAt(uv - dirW * (s * 0.5));
+        horizon = max(horizon, (hj - h) / s);
+      }
+      float lit = smoothstep(-0.04, 0.04, tanEl - horizon);
+      float ndlk = dot(n, Lk);
+      float dk = clamp((ndlk + wrap) / (1.0 + wrap), 0.0, 1.0);
+      // Capped, so a tap does not show as a hot spot on the sand right beside it.
+      float w = min(uRingRadius / dist, 3.0);
+      sum += w * dk * lit;
+      vec3 Hk = normalize(Lk + V);
+      specSum += w * lit * pow(max(dot(n, Hk), 0.0), 24.0);
+    }
+    diff = sum / float(RING_TAPS);
+    spec = specSum / float(RING_TAPS) * 0.05;
+  }
+#endif
+
   vec3 warmKey  = vec3(1.00, 0.94, 0.84);
   vec3 coolFill = vec3(0.46, 0.50, 0.60);
 
-  vec3 col = uSandColor * (diff * warmKey * 1.05 + coolFill * 0.28) * ao;
+#ifdef RING
+  float fill = uAmbient;
+#else
+  float fill = 0.28;
+#endif
+  vec3 col = uSandColor * (diff * warmKey * 1.05 + coolFill * fill) * ao;
   col += spec * warmKey;
 
   // Slight tonal variation so the sand bed isn't a flat wash.
   col *= 0.97 + 0.06 * noise(uv * 12.0);
+
+#ifdef FLOOR
+  float cover = smoothstep(0.0, uCover, h + uFloorDepth);
+  col = mix(uFloorColor * (0.35 + diff) * ao, col, cover);
+#endif
 
   // Table edge: sand stops, a soft inner shadow reads as the rim wall.
   //

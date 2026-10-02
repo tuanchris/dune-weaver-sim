@@ -152,6 +152,83 @@ Backfill deliberately does not conserve volume — it adds material that has to
 come from the bow wave the sim doesn't track. It is a tunable, not a
 measurement.
 
+### The plow model (`model: 1`)
+
+`sand.model = 1` swaps the carve pass for a mass-conserving step on the CPU
+(`src/sim/plow.ts`), run at `plowSize` cells across the table and uploaded to
+the render texture after each chunk. It moves the ball a quarter radius of arc
+length at a time along the whole path, carrying the remainder from segment to
+segment, so a line cut into one segment or a thousand gives the same sand.
+`plowSubsteps` splits each of those steps into k: every per-step share
+compounds so the k sub-steps move what the step did, while the ridge and wake
+spread and the turn estimate stay on the quarter-radius step. Each step leaves
+a seam where the ball stood, and one step per quarter ball (1.25 mm for a 10 mm
+ball) shows as a zipper along every groove and a hatch across its walls; a
+sub-step no longer than a cell (4 at 2048) removes it. At each step:
+
+- **Plow.** Everything above the ball's underside, and above the tray floor
+  (`floorMm` below the surface), joins the ball's load, booked by side.
+- **Bow wave and spill.** The ball carries what the sand plowed over
+  `plowCarryMm` of fresh travel would add up to. Beyond that, half the excess
+  spills each step, plus a steady `plowShed` share of the load per ball
+  radius. Spilled sand lands in a band `bermWidthMm` wide just outside the
+  groove, mostly on the side being cut (`plowEven` 0) or equally on both
+  (`plowEven` 1). Sand landing on the side already cut is what stands between
+  close passes, like the rings of a spiral. On a turn tighter than the band,
+  the inner band stops at the turning radius. Along the path the band is
+  weighted by a Hann window three steps either side, so consecutive steps sum to
+  the same weight and a ridge comes out smooth rather than beaded.
+- **Wake.** `plowWake` of the load per ball radius flows back into the groove
+  just behind the ball, as sand pushed aside closes in behind it. A single pass
+  then leaves a slit narrower than the ball, with sand on its floor, as the
+  physics shows, not the ball's full spherical groove. `plowWakeEdge` sets where
+  across the groove it lands: evenly (0), toward the walls (above 0) or toward
+  the middle (below 0). Spread evenly it fills the hollow between passes a
+  quarter ball apart, and the ridges the physics and the table leave between
+  them (a fill's rows, a spiral's rings) do not form.
+- **Reversal.** When the heading turns back on itself, `plowDump` of the load
+  is dropped ahead of the ball on its old heading. These are the bright caps at
+  the tips of hair strokes and the frames of a side-to-side fill. By default
+  the pile is a crescent round the front of the ball. With `plowPileR` it is a
+  round mound that many ball radii across, centred `plowPileAhead` radii ahead:
+  the bow wave left where the ball turned. Mounds from neighbouring turns merge
+  into a continuous rampart round a fill and a cap across a row of hair tips,
+  as the physics shows, where crescents stood as separate ribs.
+- **Slump.** `plowRelaxSweeps` sweeps around the ball move sand downhill to
+  `reposeSlope`, exchanging with all eight neighbours (diagonals over their
+  longer run) and leaving the cells under the ball alone. With the four axis
+  neighbours alone, piles settled into diamonds.
+
+Total sand is conserved exactly: the load left at the end is dropped ahead of
+the ball. The results barely depend on the grid: on the calibration patches,
+1024 and 2048 agree to 0.06 mm RMS. The slump is per cell, though, and spreads
+like diffusion: at 4096 it takes 4 sweeps to match 1 at 2048, and a finer grid
+alone adds no visible detail. The results don't depend on batching either:
+playing a pattern a few segments at a time and skipping to the end give the
+same sand bit for bit. A full table pattern of about 110 m runs in roughly 9 s
+at 2048 on the CPU, 32 s with 4 sub-steps. The carve model stays the default.
+
+**Calibrated.** sand-weaver's `dwpro-v3` profile is the plow model's
+settings fitted to 3D granular physics (MPM sand, Drucker-Prager, under a
+rolling ball) on small test patches. On those patches it is 0.38 mm RMS from
+the physics, against 0.96 mm for the calibrated carve model. It was not fitted
+to the photo of beaver v17 on a DW Pro, yet it correlates 0.505 with that
+photo's relief, against 0.311 for the carve model. Data, scripts and the
+fitting log are in sand-weaver's `benchmarks/sim-calibration/`. COMMENTS.md
+lists what it still gets wrong.
+
+`dwpro-v4` adds the mound piles and is refitted to all seven patches, with the
+sand piled more than 1 mm high held at least to the physics' amount: 0.37 mm
+RMS (`dwpro-v3` 0.44), with 1.04 times the physics' piled sand (0.79). Its
+render is refitted to the photo with tiled scoring and a darker ambient fill.
+
+`dwpro-v5` keeps the ridges between close passes, which the calibration patches
+drawn on the table show just as the physics does: a 2 mm berm band and the wake
+weighted to the groove's middle (`plowWakeEdge` -1), fitted on an RMSE that lets
+each 5 mm tile shift up to 1 mm. Plain RMSE punishes a narrow ridge a
+millimetre off twice, and fitting to it widened every berm into a flat-topped
+band. Ridge relief is 0.87-1.15 times the physics' (`dwpro-v4` 0.31-0.69).
+
 ### End caps are a batching artefact — but only partly
 
 A chunk's capsule has rounded caps at each end, and the *plane* through each cap
@@ -263,13 +340,15 @@ flows downhill. Written in gather form (each cell computes its own net change
 from its neighbours) so it is symmetric and conserves volume instead of drifting
 over many iterations.
 
-**Render pass** (`RENDER_FRAG`). The look is almost entirely a low grazing key
+**Render pass** (`RENDER_FRAG`). By default the look is almost entirely a low grazing key
 light — at a shallow elevation a groove a fraction of a millimetre deep casts a
 long soft shadow, which is why real sand tables photograph so well. On top of
 that: wrapped diffuse (sand scatters, so terminators are soft), ambient
 occlusion from height relative to a wider neighbourhood, and a fine grain
 applied as a *normal* perturbation rather than a colour speckle, so it catches
-the light like real grains instead of looking like film noise.
+the light like real grains instead of looking like film noise. Two opt-in
+variants match a real table instead: the LED ring and the dark floor showing
+through thin sand (see "Calibrated against a photo of a DW Pro").
 
 The table is drawn rotated 180° from heightfield space to match the orientation
 the physical table is viewed in. The surface normal is rotated along with it —
@@ -309,6 +388,49 @@ The machine's theta↔rho axis coupling is deliberately *not* modelled: the
 firmware compensates for it, so commanded (theta, rho) is the ball's true polar
 position. It affects motor motion, not where the sand ends up.
 
+### Calibrated against a photo of a DW Pro
+
+On 2026-09-30 a DW Pro drew sand-weaver's beaver (v11) and was photographed.
+Registering the photo against the render showed what the default look misses:
+
+- **Most of the contrast is the floor.** The ball rides on the tray floor (1 mm
+  dark EVA foam) under about 2.5 mm of sand, a quarter of the 10 mm ball's
+  height. Wherever a groove leaves less than about 0.6 mm of sand the floor
+  shows through, so a pattern reads as bright sand against dark floor, not as
+  shading. `render.floor = 1` shows `floorColor` through sand thinner than
+  `coverMm`, with the floor at the groove depth (`depthMm`).
+- **The light is the table's LED ring**, not one raking light.
+  `render.lightMode = 1` lights from 24 points around the rim, `ringRadius`
+  table radii out and `ringHeightMm` above the sand, each shadowed by marching
+  the heightfield `shadowMm` toward it. Nearby rim lights weigh more (inverse
+  distance, capped at 3× so the rim gets no hot spots). `ambient` is the fill
+  light under the ring (default 0.28, the raking light's): the table is viewed
+  in a dark room, and at 0.28 shadowed slits stay brighter than the photo's.
+- **The ridge holds the sand the ball moves.** `bermWidthMm` 2.5 with `bermGain`
+  2.6 keeps roughly a groove's volume in its ridges. The default 0.5 mm ridge
+  keeps about 5%.
+- **Geometry.** The photographed ball, 49 px against rings drawn 12.5 px apart at
+  a quarter-ball pitch, puts the drawable radius within about 3% of the 700 mm
+  default.
+
+The ring light and the floor are compile-time variants of the render shader
+(`withDefine` in `shaders.ts`), built on first use. The default program, and so
+every default render, is unchanged bit for bit. sand-weaver carries the
+calibrated set as its `dwpro` profile (`experiments/region-program/table-profiles.js`,
+used by `plan-check --profile=dwpro`).
+
+What it still gets wrong comes mostly from sand not being conserved where the
+ball works a small closed area (COMMENTS.md):
+
+- An eye traced inward heaps a mound in its middle on the table. The simulator
+  shows a dark spiral.
+- A 0.6-ball zigzag in a tooth-sized box became a raised block with a slot. The
+  simulator shows clean chevrons.
+- Backfill adds sand on every repeated pass, so a dense spiral renders paler
+  than the bare floor it leaves on the table.
+- With the wide ridge, long smooth curves show faint pinches at the path's
+  chord vertices.
+
 ### Not modelled
 
 Physical table and ball dimensions aren't recorded anywhere in the firmware or
@@ -319,7 +441,8 @@ measured off the hardware, so set them for the table you care about.
 The sand defaults are the same kind of thing: a narrow, sharply defined ridge
 with a lot of material thrown up (`bermWidthMm` 0.5, `bermGain` 1.06) and low
 backfill (`fill` 0.21), so a pattern drawn over another only partly erases it.
-They are a look, not a measurement.
+They are a look, not a measurement. The one measured set is the DW Pro
+calibration above, and it is still one table and one photo.
 
 Feedrate is ignored: the sand result depends on path geometry, not on how fast
 it was traced.
