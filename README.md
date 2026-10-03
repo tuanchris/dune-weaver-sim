@@ -193,7 +193,17 @@ sub-step no longer than a cell (4 at 2048) removes it. At each step:
   round mound that many ball radii across, centred `plowPileAhead` radii ahead:
   the bow wave left where the ball turned. Mounds from neighbouring turns merge
   into a continuous rampart round a fill and a cap across a row of hair tips,
-  as the physics shows, where crescents stood as separate ribs.
+  as the physics shows, where crescents stood as separate ribs. With
+  `plowHeap` 1 the pile pours as a heap instead of being laid on top: its
+  crest is an arc `plowPileAhead` radii from the turn's apex, `plowPileArc`
+  degrees either side of the old heading and `plowPileR` radii wide, its faces
+  stand at `reposeSlope`, and it is raised until it holds the pile. Sand fills
+  everything under that surface, so an older groove beneath the pile is buried
+  to its face and ends at its toe. A mound laid on top left the groove as a dip
+  that faded out across the mound, and its paraboloid face, far below repose,
+  never slumped into a toe: on the table that read as a blurry white blob where
+  the table shows a crisp cap. The physics (`turn` and `bury` patches) puts the
+  pile as a crest pressed against the ball's front with faces at repose.
 - **Slump.** `plowRelaxSweeps` sweeps around the ball move sand downhill to
   `reposeSlope`, exchanging with all eight neighbours (diagonals over their
   longer run) and leaving the cells under the ball alone. With the four axis
@@ -228,6 +238,15 @@ weighted to the groove's middle (`plowWakeEdge` -1), fitted on an RMSE that lets
 each 5 mm tile shift up to 1 mm. Plain RMSE punishes a narrow ridge a
 millimetre off twice, and fitting to it widened every berm into a flat-topped
 band. Ridge relief is 0.87-1.15 times the physics' (`dwpro-v4` 0.31-0.69).
+
+`dwpro-v6` pours the turn piles as heaps (`plowHeap`), refitted on nine
+patches: the seven plus `turn` (a reversal with the whole pile in the window;
+the whisker's window ends 1 mm past the ball's front) and `bury` (the same
+turn after a slit across its end). Tiled RMSE 0.286 mm against `dwpro-v5`'s
+0.312 on the same nine, every patch closer (`bury` 0.252 against 0.308, `turn`
+0.187 against 0.231), ridge relief 0.79-1.00 times the physics'. Not fitted to
+the v17 photo, it scores higher there too (ring render, tiled, 0.590 against
+0.581).
 
 ### End caps are a batching artefact — but only partly
 

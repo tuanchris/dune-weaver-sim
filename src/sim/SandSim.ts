@@ -110,6 +110,14 @@ export interface SandParams {
    */
   plowPileR: number;
   plowPileAhead: number;
+  /**
+   * 1: the pile pours as a heap (plow.ts `heap`) that fills and buries what lies under it: faces at
+   * the angle of repose from a crest on an arc `plowPileAhead` ball radii round the ball's front,
+   * `plowPileArc` degrees either side of its heading, `plowPileR` radii wide. 0: the mound or
+   * crescent above, laid on top of the sand.
+   */
+  plowHeap: number;
+  plowPileArc: number;
   /** Plow grid resolution (cells across the table); its heights are upsampled to the render grid. */
   plowSize: number;
   /** Tray floor below the nominal surface, mm (0 = deep sand). The ball rides at `depthMm`. */
@@ -180,6 +188,8 @@ export const DEFAULT_SAND: SandParams = {
   plowSubsteps: 1,
   plowPileR: 0,
   plowPileAhead: 1.7,
+  plowHeap: 0,
+  plowPileArc: 0,
   plowSize: 1024,
   floorMm: 0,
   grain: 0.0012,
@@ -794,7 +804,7 @@ export class SandSim {
       shed: this.sand.plowShed, carry: this.sand.plowCarryMm * this.worldPerMm, fill: this.sand.plowFill, dump: this.sand.plowDump, even: this.sand.plowEven ?? 0, ridgePeak: Math.min(.95, Math.max(0, this.sand.plowRidgePeak ?? 0)), wake: this.sand.plowWake ?? 0, wakeEdge: this.sand.plowWakeEdge ?? 0,
       repose: this.sand.reposeSlope, relaxSweeps: Math.max(0, Math.round(this.sand.plowRelaxSweeps)),
       substeps: Math.max(1, Math.round(this.sand.plowSubsteps ?? 1)),
-      pileR: Math.max(0, this.sand.plowPileR ?? 0), pileAhead: this.sand.plowPileAhead ?? 1.7,
+      pileR: Math.max(0, this.sand.plowPileR ?? 0), pileAhead: this.sand.plowPileAhead ?? 1.7, heap: this.sand.plowHeap ?? 0, pileArc: this.sand.plowPileArc ?? 0,
     };
   }
 

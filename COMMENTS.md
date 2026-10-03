@@ -94,6 +94,14 @@ of one table. These are its known gaps:
   tooth (0.60 against 0.66 mm) but not the spiral (0.59 against 0.53 mm).
   `dwpro-v4` is fitted on all seven.
 
+- **Only the turn piles bury.** With `plowHeap` the pile at a reversal fills
+  what lies under it, as the physics does. The ridges shed along a stroke
+  (`plowShed`, the berm band) are still laid on top, so a later line's berm
+  over older grooves leaves them as dips; no physics patch tests that yet. The
+  heap also fills the older slit a little more than the physics on the turn's
+  axis (`bury`: floor -0.66 mm against -1.43), and on the beaver v17 photo the
+  caps at hair tips are fuller lobes than the heap's crescents.
+
 **Faint stipple along overlapping grooves.** Noticed early, never diagnosed.
 Distinct from the periodic spike above; shows up where two grooves cross at a
 shallow angle.

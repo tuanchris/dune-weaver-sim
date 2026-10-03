@@ -95,6 +95,20 @@ export interface PlowParams {
    */
   pileR?: number;
   pileAhead?: number;
+  /**
+   * 1: the pile pours as a heap instead of a mound laid on top. Its crest is an arc `pileAhead` ball
+   * radii from the ball's centre, round its front, `pileArc` degrees either side of the old heading
+   * (0: a point straight ahead), widened by `pileR` ball radii; its faces stand at the angle of repose,
+   * and it is raised until it holds the pile's volume. The sand fills everything below that surface:
+   * an older groove under the pile is buried to the heap's face and ends at its toe. A mound added on
+   * top (heap 0) leaves the groove under it as a dip, shallower but still there, that fades out across
+   * the mound's width, and its paraboloid face, below the repose slope, never slumps into the steep toe
+   * a heap has (granular physics, the `turn` and `bury` patches: a crescent hugging the ball's front
+   * with repose faces). Arcs from neighbouring turns merge into one wall, where cones stacked into
+   * beads. The cells under the ball stay as they are (it holds the groove open while it is there).
+   */
+  heap?: number;
+  pileArc?: number;
 }
 
 export interface PlowState {
@@ -187,7 +201,11 @@ function step(h: Float32Array, size: number, p: PlowParams, st: PlowState, cx: n
     let k = 0;
     for (let j = 1; j < st.hx.length; j++) if (st.hx[j] * dx + st.hy[j] * dy < st.hx[k] * dx + st.hy[k] * dy) k = j;
     const ox = st.hx[k], oy = st.hy[k], load = (st.loadL + st.loadR) * p.dump;
-    if (pile(h, size, p, st.px[k], st.py[k], load, ox, oy)) { st.loadL *= 1 - p.dump; st.loadR *= 1 - p.dump; }
+    // A heap stands round the turn's apex, the furthest the ball reached along the old heading; the
+    // mound (fitted earlier) is placed from where the ball was on that heading, up to a radius back.
+    let ax = st.px[k], ay = st.py[k];
+    if ((p.heap ?? 0) > 0) for (let j = 0; j < st.px.length; j++) if (st.px[j] * ox + st.py[j] * oy > ax * ox + ay * oy) { ax = st.px[j]; ay = st.py[j]; }
+    if (pile(h, size, p, ax, ay, load, ox, oy)) { st.loadL *= 1 - p.dump; st.loadR *= 1 - p.dump; }
     st.turning = true;
   } else if (back > 0.5) st.turning = false;
 
@@ -319,7 +337,9 @@ function ridgeProfile(t: number, peak: number): number {
 /** Returns whether the volume landed (it doesn't when the pile falls off the grid). */
 function pile(h: Float32Array, size: number, p: PlowParams, x: number, y: number, volume: number, ox = 0, oy = 0): boolean {
   if (!(volume > 0)) return false;
-  const hasDir = ox !== 0 || oy !== 0, mound = hasDir && (p.pileR ?? 0) > 0;
+  const hasDir = ox !== 0 || oy !== 0;
+  if (hasDir && (p.heap ?? 0) > 0) return heap(h, size, p, x, y, ox, oy, volume);
+  const mound = hasDir && (p.pileR ?? 0) > 0;
   const c = cell(size), r0 = 0.7 * p.ballR, r1 = r0 + Math.max(p.ridgeW, 0.6 * p.ballR);
   // The mound's centre and radius; the crescent scans round the ball.
   const rm = mound ? (p.pileR ?? 0) * p.ballR : r1, ahead0 = mound ? (p.pileAhead ?? 1.7) * p.ballR : 0;
@@ -347,6 +367,48 @@ function pile(h: Float32Array, size: number, p: PlowParams, x: number, y: number
     const w = weight(col, row);
     if (w > 0) h[row * size + col] += volume * w / wsum;
   }
+  return true;
+}
+
+let heapA = new Float64Array(0), heapI = new Int32Array(0);
+/**
+ * Pour `volume` as a heap round the front of the ball at (bx, by), heading (ox, oy): the surface
+ * top - repose * (distance from the crest - pileR) wherever it stands above the sand, `top` set so
+ * the sand added is exactly `volume` (see PlowParams.heap). Cells under the ball are left alone. The
+ * heap reaches at most 4 ball radii past its crest.
+ */
+function heap(h: Float32Array, size: number, p: PlowParams, bx: number, by: number, ox: number, oy: number, volume: number): boolean {
+  const c = cell(size), R = p.ballR, s = p.repose, ra = (p.pileAhead ?? 1.7) * R, core = (p.pileR ?? 0) * R;
+  const phi = Math.min(Math.PI, Math.max(0, (p.pileArc ?? 0) * Math.PI / 180)), ex = ra * Math.cos(phi), ey = ra * Math.sin(phi);
+  const reach = ra + core + 4 * R, busy2 = (0.9 * R) ** 2;
+  const c0 = Math.max(0, Math.floor((bx - reach + 1) / c)), c1 = Math.min(size - 1, Math.ceil((bx + reach + 1) / c));
+  const r0 = Math.max(0, Math.floor((by - reach + 1) / c)), r1 = Math.min(size - 1, Math.ceil((by + reach + 1) / c));
+  const n = (r1 - r0 + 1) * (c1 - c0 + 1);
+  if (heapA.length < n) { heapA = new Float64Array(n); heapI = new Int32Array(n); }
+  // a = the level the heap's surface must reach before it adds sand to a cell.
+  let m = 0;
+  for (let row = r0; row <= r1; row++) {
+    const y = (row + 0.5) * c - 1 - by;
+    for (let col = c0; col <= c1; col++) {
+      const x = (col + 0.5) * c - 1 - bx, r2 = x * x + y * y;
+      if (r2 < busy2) continue;
+      // Distance to the crest: radial within the arc's span, else to its nearer end.
+      const ahead = x * ox + y * oy, lat = Math.abs(ox * y - oy * x), r = Math.sqrt(r2);
+      const d = Math.atan2(lat, ahead) <= phi ? Math.abs(r - ra) : Math.hypot(ahead - ex, lat - ey);
+      if (d > core + 4 * R) continue;
+      const i = row * size + col;
+      heapI[m] = i; heapA[m++] = h[i] + s * Math.max(0, d - core);
+    }
+  }
+  if (!m) return false;
+  // Fill from the lowest: with the k lowest levels under `top`, k * top - their sum = volume.
+  const sorted = heapA.slice(0, m).sort();
+  let sum = 0, top = sorted[0];
+  for (let k = 0; k < m; k++) {
+    sum += sorted[k]; top = (volume + sum) / (k + 1);
+    if (k + 1 === m || top <= sorted[k + 1]) break;
+  }
+  for (let j = 0; j < m; j++) { const v = top - heapA[j]; if (v > 0) h[heapI[j]] += v; }
   return true;
 }
 
