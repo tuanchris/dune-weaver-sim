@@ -5,6 +5,12 @@ like on the table after playing it. The ball plows a groove, pushes displaced
 sand into ridges along the edges, and later passes cut through and erase what
 came before.
 
+<p align="center">
+  <img src="docs/starry-night-default.jpg" width="49%" alt="Starry Night rendered with the default carve model and raking light">
+  <img src="docs/starry-night-dw-pro.jpg" width="49%" alt="Starry Night rendered with the plow model and the calibrated DW Pro settings">
+</p>
+<p align="center"><sub>Starry Night with the defaults (left) and with the plow model's calibrated DW Pro settings (right).</sub></p>
+
 ```bash
 npm install
 npm run dev      # http://localhost:3000
@@ -218,14 +224,17 @@ playing a pattern a few segments at a time and skipping to the end give the
 same sand bit for bit. A full table pattern of about 110 m runs in roughly 9 s
 at 2048 on the CPU, 32 s with 4 sub-steps. The carve model stays the default.
 
-**Calibrated.** sand-weaver's `dwpro-v3` profile is the plow model's
-settings fitted to 3D granular physics (MPM sand, Drucker-Prager, under a
-rolling ball) on small test patches. On those patches it is 0.38 mm RMS from
-the physics, against 0.96 mm for the calibrated carve model. It was not fitted
-to the photo of beaver v17 on a DW Pro, yet it correlates 0.505 with that
-photo's relief, against 0.311 for the carve model. Data, scripts and the
-fitting log are in sand-weaver's `benchmarks/sim-calibration/`. COMMENTS.md
-lists what it still gets wrong.
+**Calibrated.** The plow model's settings were fitted to 3D granular physics
+(MPM sand, Drucker-Prager, under a rolling ball) on small test patches, and
+checked against photos of a DW Pro. The fitting was done in a separate
+calibration workbench, so its data and scripts are not in this repository.
+The fits are named `dwpro-v3` to `dwpro-v6`. The latest one, `dwpro-v6`, is
+listed under "Trying the calibrated settings" below.
+
+`dwpro-v3` is 0.38 mm RMS from the physics on those patches, against 0.96 mm for
+the calibrated carve model. It was not fitted to the photo of beaver v17 on a
+DW Pro, yet it correlates 0.505 with that photo's relief, against 0.311 for the
+carve model. COMMENTS.md lists what it still gets wrong.
 
 `dwpro-v4` adds the mound piles and is refitted to all seven patches, with the
 sand piled more than 1 mm high held at least to the physics' amount: 0.37 mm
@@ -247,6 +256,40 @@ turn after a slit across its end). Tiled RMSE 0.286 mm against `dwpro-v5`'s
 0.187 against 0.231), ridge relief 0.79-1.00 times the physics'. Not fitted to
 the v17 photo, it scores higher there too (ring render, tiled, 0.590 against
 0.581).
+
+### Trying the calibrated settings
+
+The panel has only the carve model's controls. The plow model and the DW Pro
+render are left out because the plow model runs on the CPU and takes seconds
+per pattern, which is too slow for sliders that re-run the pattern as you drag.
+With these settings on an M4 Max, Maze takes about 3 s and Starry Night about
+9 s.
+
+To try them, paste this into the browser console on the app's page. It writes
+the stored settings the panel saves, and the page loads them on reload:
+
+```js
+localStorage.setItem('dune-weaver-sim:settings:v1', JSON.stringify({
+  // dwpro-v6
+  sand: {
+    depthMm: 2.5, model: 1, plowSize: 2048, plowSubsteps: 4, floorMm: 2.5,
+    bermWidthMm: 2.25, plowCarryMm: 25, plowDump: 0.5, plowShed: 0.4,
+    plowRelaxSweeps: 1, reposeSlope: 0.5, plowEven: 0, plowWake: 0.1,
+    plowWakeEdge: -1, plowHeap: 1, plowPileArc: 45, plowPileR: 0.2, plowPileAhead: 1.2,
+  },
+  render: {
+    floor: 1, coverMm: 0.8, floorColor: [0.113, 0.085, 0.085],
+    sandColor: [1.323, 1.19, 1.207], lightMode: 1, ringRadius: 1.02,
+    ringHeightMm: 20, shadowMm: 22, aoStrength: 80, relief: 4.4, ambient: 0.04,
+  },
+}));
+location.reload();
+```
+
+This replaces any settings you have saved. In this mode, **Ridge buildup** and
+**Backfill** do nothing, because they belong to the carve model. Every sand
+slider still re-runs the whole pattern, so expect a stall while you drag.
+**Reset parameters** goes back to the defaults.
 
 ### End caps are a batching artefact — but only partly
 
@@ -409,7 +452,7 @@ position. It affects motor motion, not where the sand ends up.
 
 ### Calibrated against a photo of a DW Pro
 
-On 2026-09-30 a DW Pro drew sand-weaver's beaver (v11) and was photographed.
+On 2026-09-30 a DW Pro drew a test pattern (beaver v11) and was photographed.
 Registering the photo against the render showed what the default look misses:
 
 - **Most of the contrast is the floor.** The ball rides on the tray floor (1 mm
@@ -434,9 +477,9 @@ Registering the photo against the render showed what the default look misses:
 
 The ring light and the floor are compile-time variants of the render shader
 (`withDefine` in `shaders.ts`), built on first use. The default program, and so
-every default render, is unchanged bit for bit. sand-weaver carries the
-calibrated set as its `dwpro` profile (`experiments/region-program/table-profiles.js`,
-used by `plan-check --profile=dwpro`).
+every default render, is unchanged bit for bit. The carve-model fit described
+here has since been replaced by the plow model's `dwpro-v6`, which uses both
+variants (see "Trying the calibrated settings").
 
 What it still gets wrong comes mostly from sand not being conserved where the
 ball works a small closed area (COMMENTS.md):
@@ -472,11 +515,15 @@ it was traced.
 | --- | --- |
 | `src/lib/thr.ts` | `.thr` parsing, theta normalisation, polar resampling |
 | `src/sim/shaders.ts` | GLSL: carve, relax, reset, render |
-| `src/sim/SandSim.ts` | WebGL2 heightfield, front/scratch/base targets, transport |
+| `src/sim/SandSim.ts` | WebGL2 heightfield, front/scratch/base targets, transport, settings and defaults |
+| `src/sim/plow.ts` | The plow model (`model: 1`), on the CPU |
 | `src/components/SandTable.tsx` | UI, playback loop, parameter controls |
-| `public/patterns/` | Sample patterns copied from the `dune-weaver` repo |
+| `public/patterns/` | Sample patterns copied from [dune-weaver](https://github.com/tuanchris/dune-weaver) |
 | `public/patterns/test/` | Generated diagnostics — gitignored, run the script |
+| `scripts/render.mjs` | Headless render and regression-check CLI |
 | `scripts/make-test-patterns.mjs` | Generates the synthetic test patterns |
+| `COMMANDS.md` | Every command and flag |
+| `COMMENTS.md` | What is unresolved, deliberately not modelled, or fragile |
 
 ## CLI
 
@@ -518,3 +565,11 @@ deliberately low.
 
 See `COMMENTS.md` for unresolved artefacts, deliberate omissions, and what the
 checks do *not* cover.
+
+## License
+
+Dual-licensed, like [Dune Weaver](https://github.com/tuanchris/dune-weaver):
+GPL-3.0 for open-source, personal and non-commercial use (`LICENSE-GPL-3.0`), or
+a commercial license for anything that can't comply with the GPL. See `LICENSE`.
+The bundled patterns in `public/patterns/` come from the Dune Weaver repository
+under the same terms.

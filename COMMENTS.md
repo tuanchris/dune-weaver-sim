@@ -184,6 +184,3 @@ is well-behaved, and more than one bug hid behind exactly that.
   lines and dropped files exist only as text in memory, so saving history means
   megabytes in a ~5 MB store. The safe version stores bundled samples by
   filename and dropped files only under a size budget.
-- **Turbopack warns about the workspace root.** The parent directory is itself a
-  git repo with its own lockfile. Harmless for dev; pin `turbopack.root` in
-  `next.config.ts` if it ever resolves the wrong way.

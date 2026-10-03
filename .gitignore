@@ -43,5 +43,5 @@ next-env.d.ts
 # generated test patterns (recreate with scripts/make-test-patterns.mjs)
 /public/patterns/test/
 
-# check failure artefacts
-/check-erasure-*.png
+# render output (npm run render writes <pattern>.png here) and check failure artefacts
+/*.png
